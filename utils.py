@@ -96,10 +96,12 @@ def display_random(test_loader, model, batch_size = 64):
         for j in np.random.randint(0, batch_size, 10):
             j = min(len(inputs)-1, j) # since last batch might have no. of elements < batch_size if test_size is not a multiple of batch_size
             input_tensor, target_tensor = inputs[j], targets[j]
+            input_tensor = input_tensor.unsqueeze(0)
+            target_tensor = target_tensor.unsqueeze(0)
+            
             input_arr= np.array(input_tensor)
             target = np.array(target_tensor)
 
-            
             pred_tensor = model(input_tensor.to(device))
             pred = pred_tensor.detach().cpu().numpy()
     
@@ -114,6 +116,10 @@ def display_random(test_loader, model, batch_size = 64):
             prediction = np.array(predictions[i, j])
             prediction = prediction.transpose(1, 2, 0)
             '''
+            if(len(input_arr.shape) > 3):
+                input_arr = np.squeeze(input_arr, 0)
+            if(len(target.shape) > 3):
+                target = np.squeeze(target, 0)
             input_arr = input_arr.transpose(1, 2, 0)
             target = target.transpose(1, 2, 0)
             
