@@ -24,10 +24,9 @@ from torchvision import models
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # transfer model
-def transfer_model(dataset, model, optimizer, epoch_loss_list, epoch_acc_list, train_size, test_size, prev_epochs = 0):
+def transfer_model(PATH, dataset, model, optimizer, epoch_loss_list, epoch_acc_list, train_size, test_size, prev_epochs = 0):
     checkpnt_flag = 1
     # transfering previous checkpoint
-    PATH = "fsrcnn_phase1.pt"
     try:
     #{
         checkpoint = torch.load(PATH, weights_only = True)

@@ -24,7 +24,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # defining model
 class FSRCNN(nn.Module):
-    def __init__(self, scale_factor = 2, num_channels=3, d=56, s=12, m=4):
+    def __init__(self, scale_factor = 2, num_channels=1, d=56, s=12, m=4):
         super(FSRCNN, self).__init__()
         self.first_part = nn.Sequential(
             nn.Conv2d(num_channels, d, kernel_size=5, padding=5//2),
@@ -55,6 +55,7 @@ class FSRCNN(nn.Module):
         nn.init.zeros_(self.last_part.bias.data)
 
     def forward(self, x):
+        x = x/255.0
         x = self.first_part(x)
         if torch.isnan(x).any():
             print("NaN detected in first part")
@@ -64,4 +65,23 @@ class FSRCNN(nn.Module):
         x = self.last_part(x)
         if torch.isnan(x).any():
             print("NaN detected in last part")
+        '''
+        # n = 3 might give good results (to tackle the vanishing gradient problem as posed by sigmoid function)
+        n = 1
+        x = torch.sigmoid(x/n)
+        x = x*255.0
+        '''
+        
+        # min max normalise
+        min_values, _ = torch.min(x, dim = -1, keepdim = True)
+        min_values, _ = torch.min(min_values, dim = -2, keepdim = True)
+        # expected shape: (batch_size, num_channels, 1, 1)
+        max_values, _ = torch.max(x, dim = -1, keepdim = True)
+        max_values, _ = torch.max(max_values, dim = -2, keepdim = True)
+
+        # broadcasting expected along dimensions -1 and -2
+        x = (x-min_values)/(max_values-min_values)
+        x = x * 255.0
+        
+        
         return x
