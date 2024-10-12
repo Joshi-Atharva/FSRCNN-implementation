@@ -24,6 +24,8 @@ from dataset import SRdatasets
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # input representation conversion
+# source for rgb to ycbcr: https://stackoverflow.com/questions/35595215/conversion-formula-from-rgb-to-ycbcr
+# source for ycbcr to rbg: 
 def convert_rgb_to_y(img, dim_order='chw'):
     
     # ensure that input is batched
@@ -38,7 +40,7 @@ def convert_rgb_to_y(img, dim_order='chw'):
         ret_tensor = ret_tensor.unsqueeze(1)
         # shape = (batch_size, 1, height, width)
         return ret_tensor
-        # returns 2D tensor
+        # returns 4D tensor
 
 def convert_rgb_to_ycbcr(img, dim_order='chw'):
 
@@ -55,8 +57,8 @@ def convert_rgb_to_ycbcr(img, dim_order='chw'):
         cb = 128. + (-37.945 * img[:, 0, :, :] - 74.494 * img[:, 1, :, :] + 112.439 * img[:, 2, :, :]) / 256.
         cr = 128. + (112.439 * img[:, 0, :, :] - 94.154 * img[:, 1, :, :] - 18.285 * img[:, 2, :, :]) / 256.
         # shape of each = (batch_size, height, width)
-    return torch.stack([y, cb, cr], dim = 1) # stacks the tensors along the new 0'th dimension so that the final shape becomes (3, h, w)
-    # returns 3D tensor
+    return torch.stack([y, cb, cr], dim = 1) # stacks the tensors along the new 1'th dimension so that the final shape becomes (batch_size, 3, h, w)
+    # returns 4D tensor
 
 def convert_ycbcr_to_rgb(img, dim_order='chw'):
     
@@ -69,18 +71,37 @@ def convert_ycbcr_to_rgb(img, dim_order='chw'):
         b = 298.082 * img[..., 0] / 256. + 516.412 * img[..., 1] / 256. - 276.836
     else:
         r = 298.082 * img[:, 0, :, :] / 256. + 408.583 * img[:, 2, :, :] / 256. - 222.921
-        g = 298.082 * img[:, 0, :, :] / 256. - 100.291 * img[:, 1, :, :] / 256. - 208.120 * img[:, 2] / 256. + 135.576
+        g = 298.082 * img[:, 0, :, :] / 256. - 100.291 * img[:, 1, :, :] / 256. - 208.120 * img[:, 2, :, :] / 256. + 135.576
         b = 298.082 * img[:, 0, :, :] / 256. + 516.412 * img[:, 1, :, :] / 256. - 276.836
         # shape of each = (batch_size, height, width)
-    return torch.stack([r, g, b], dim = 1) # joins (stacks) along new dimension at position 1
-    # returns 3d tensor
+    x = torch.stack([r, g, b], dim = 1) # joins (stacks) along new dimension at position 1
+    # shape: (batch_size, 3, height, width)
+ 
+    # min max normalise
+    # obtaining min and max values separated for each image and its channels
+    # reducing the dimensions -1 and -2 (width and height) in a casacding manner
+    # final size of max and min_values: (batch_size, 3, 1, 1) which will be broadcasted to be operated with x
+    min_values, _ = torch.min(x, dim = -1, keepdim = True)
+    min_values, _ = torch.min(min_values, dim = -2, keepdim = True)
+    # expected shape: (batch_size, num_channels, 1, 1)
+    max_values, _ = torch.max(x, dim = -1, keepdim = True)
+    max_values, _ = torch.max(max_values, dim = -2, keepdim = True)
+
+    epsilon = 1e-17
+    # broadcasting expected along dimensions -1 and -2
+    x = (x-min_values)/(max_values-min_values + epsilon)
+    x = x * 255.0    
+    return x
+    # returns 4d tensor
 
 import torch
 import torch.nn.functional as F
 
 def combine_y_with_cbcr(y_pred, ycbcr_input):
+    ycbcr_input.to(device)
     # Extract Y, Cb, and Cr channels
-    y = y_pred  # Shape: (batch_size, 1, height, width)
+    y = y_pred
+    y.to(device) # Shape: (batch_size, 1, height, width)
     
     cb = ycbcr_input[:, 1, :, :]  # Extract Cb channel, shape: (batch_size, height_small, width_small)
     cr = ycbcr_input[:, 2, :, :]  # Extract Cr channel, shape: (batch_size, height_small, width_small)
@@ -92,11 +113,13 @@ def combine_y_with_cbcr(y_pred, ycbcr_input):
     # Resize Cb and Cr to the same height and width as y_pred using bicubic interpolation
     # note that the torch.nn.functional.interpolate() expects batched input (batch_size, channel, height, width)
     # hence the unsqueeze inside the function
-    cb_resized = F.interpolate(cb.unsqueeze(1), size=(target_height, target_width), mode='bicubic', align_corners=False)
-    cr_resized = F.interpolate(cr.unsqueeze(1), size=(target_height, target_width), mode='bicubic', align_corners=False)
+    cb_resized = F.interpolate(cb.unsqueeze(1), size=(target_height, target_width), mode='bicubic', align_corners=False).to(device)
+    cr_resized = F.interpolate(cr.unsqueeze(1), size=(target_height, target_width), mode='bicubic', align_corners=False).to(device)
+    # shape: (batch_size, 1, height, width)
     
     # Concatenate the Y, Cb, and Cr channels along the channel dimension (dim=1)
     return torch.cat([y, cb_resized, cr_resized], dim=1)
+    # shape: (batch_size, 3, height, width)
     
 
 # defining psnr metric:
@@ -202,9 +225,9 @@ def display_random(test_loader, model, batch_size = 64):
             # pred_arr stores array with rgb values
             pred_arr= pred_tensor.detach().cpu().numpy()
             
-            if(len(pred.shape) > 3):
-                pred_arr= np.squeeze(pred, 0)
-            pred_arr= pred.transpose(1, 2, 0)
+            if(len(pred_arr.shape) > 3):
+                pred_arr= np.squeeze(pred_arr, 0)
+            pred_arr= pred_arr.transpose(1, 2, 0)
     
             # use of prediction list - didn't work out and felt unnecessary:
             '''
@@ -246,14 +269,14 @@ def display_random(test_loader, model, batch_size = 64):
 # for observing a particular sample (particular image)
 def display_particular(i, model):
     sample_set = SRdatasets()
-    input_tensor, target_tensor = sample_set[i] 
+    input_tensor, target_tensor = sample_set[i] # returns unbatched (channels, height, width)
       
     input_tensor_loaded = input_tensor.unsqueeze(0)
     input_tensor_loaded = input_tensor_loaded.to(device)
     ycbcr_input = convert_rgb_to_ycbcr(input_tensor_loaded)
     y_input = ycbcr_input[:, 0, :, :].unsqueeze(1)
     
-    prediction = model(y_input.to(device))
+    prediction = model(y_input.to(device)) # stores y_channel output
     print('input:')
     plt.imshow(np.array(input_tensor).astype('uint8').transpose(1, 2, 0))
     plt.show()
@@ -262,7 +285,8 @@ def display_particular(i, model):
     plt.show()
     print('prediction:')
     prediction = combine_y_with_cbcr(prediction, ycbcr_input)
-    prediction = convert_ycbcr_to_rgb(prediction)
+    prediction = convert_ycbcr_to_rgb(prediction) # outputs batched (4d) tensor
+    prediction = prediction.squeeze(0)
     prediction = prediction.detach().cpu().numpy()
     plt.imshow(np.array(prediction).astype('uint8').transpose(1, 2, 0))
     plt.show()
